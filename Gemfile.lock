@@ -1,5 +1,5 @@
 PATH
-  remote: ../end_point_blank_rack
+  remote: ../end_point_blank_rails
   specs:
     end_point_blank (0.1.0)
       excon (~> 1.0)
