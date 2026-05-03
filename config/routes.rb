@@ -3,8 +3,8 @@ Rails.application.routes.draw do
     resources :requests
   end
   resources :users
-  resources :students, only: [:index]
-  resources :teachers, only: [:show, :index]
+  resources :students, only: [:index, :create, :destroy]
+  resources :staff, only: [:index, :create, :destroy]
   resources :errors, only: [:index]
 
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
