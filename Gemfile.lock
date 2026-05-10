@@ -1,5 +1,6 @@
-PATH
-  remote: ../end_point_blank_rails
+GIT
+  remote: git@github.com:EndPointBlank/end_point_blank_rails.git
+  revision: 82ae4c95c5c79723c8c4c6408dee7b2dcf4c9795
   specs:
     end_point_blank (0.1.0)
       excon (~> 1.0)
