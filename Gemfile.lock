@@ -1,6 +1,6 @@
 GIT
   remote: https://github.com/EndPointBlank/end_point_blank_rails.git
-  revision: d0fbdaf2ed6d743f8d2bd23f90e57941b2ea7a00
+  revision: 5e91d694c16ffdffe1d9d16f0126cb228b20aa9a
   specs:
     end_point_blank (0.1.0)
       excon (~> 1.0)
@@ -258,7 +258,7 @@ GEM
     regexp_parser (2.10.0)
     reline (0.6.0)
       io-console (~> 0.5)
-    rexml (3.4.1)
+    rexml (3.4.4)
     rubocop (1.74.0)
       json (~> 2.3)
       language_server-protocol (~> 3.17.0.2)
