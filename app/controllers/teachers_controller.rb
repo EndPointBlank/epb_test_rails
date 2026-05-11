@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'debug'
-
 class TeachersController < AuthenticatedController
   version ["2.0"], only: [:index, :show], state: "In Development"
   version ["1.0"], only: [:index, :show], state: "Current"
@@ -15,7 +13,7 @@ class TeachersController < AuthenticatedController
 			]
 		}
   rescue => e
-    debugger
+    raise e
 	end
 
   def show
