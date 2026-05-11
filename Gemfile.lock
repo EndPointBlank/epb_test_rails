@@ -1,6 +1,6 @@
 GIT
   remote: https://github.com/EndPointBlank/end_point_blank_rails.git
-  revision: 5e91d694c16ffdffe1d9d16f0126cb228b20aa9a
+  revision: 51ff368033a79e7b3a20e8ded037b2bf00b302b1
   specs:
     end_point_blank (0.1.0)
       excon (~> 1.0)
