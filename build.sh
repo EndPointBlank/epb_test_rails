@@ -4,4 +4,4 @@ set -o errexit
 cd "$(dirname "$0")"
 
 bundle install
-bundle exec rake db:create db:migrate
+bundle exec rake db:migrate
