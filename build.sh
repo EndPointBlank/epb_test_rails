@@ -3,7 +3,6 @@ set -o errexit
 
 cd "$(dirname "$0")"
 
-rails db:setup
-
+bundle binstubs bundler --force
 bundle install
 bundle exec rake db:migrate
