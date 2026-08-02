@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class StaffController < AuthenticatedController
-  version [ "1" ], only: [ :index, :create, :destroy ], state: "Current"
+  version [ "1" ], only: [ :index, :create, :destroy ]
 
   def index
     render json: { staff: Staff.all }

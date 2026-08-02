@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 class TeachersController < AuthenticatedController
-  version [ "2.0" ], only: [ :index, :show ], state: "In Development"
-  version [ "1.0" ], only: [ :index, :show ], state: "Current"
+  version [ "2.0" ], only: [ :index, :show ]
+  version [ "1.0" ], only: [ :index, :show ]
 
   def index
     EndPointBlank::Writers::LogWriter.info("Fetching teachers list (2)")
