@@ -3,7 +3,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [ main ]
+    # This repository's default branch is master, not main. While it said main,
+    # nothing here ever ran on a push, so master's state went unmeasured and
+    # three failures accumulated unnoticed.
+    branches: [ master ]
 
 jobs:
   scan_ruby:
@@ -56,12 +59,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    # services:
-    #  redis:
-    #    image: redis
-    #    ports:
-    #      - 6379:6379
-    #    options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    # The application is backed by PostgreSQL, but no database was ever started
+    # here, so this job could only ever fail with PG::ConnectionBad.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
     steps:
       - name: Install packages
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential git libyaml-dev pkg-config google-chrome-stable
@@ -78,7 +87,9 @@ jobs:
       - name: Run tests
         env:
           RAILS_ENV: test
-          # REDIS_URL: redis://localhost:6379/0
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
         run: bin/rails db:test:prepare test test:system
 
       - name: Keep screenshots from failed system tests

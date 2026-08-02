@@ -3,12 +3,12 @@
 module Utility
   class GitCommit
     def self.commit_sha
-      if Rails.root.join('.git').exist?
+      if Rails.root.join(".git").exist?
         `git rev-parse HEAD`.chomp
-      elsif ENV['GIT_COMMIT']
-        ENV['GIT_COMMIT']
+      elsif ENV["GIT_COMMIT"]
+        ENV["GIT_COMMIT"]
       else
-        '0'
+        "0"
       end
     end
   end

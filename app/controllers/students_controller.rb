@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class StudentsController < AuthenticatedController
-  version ["1"], only: [:index, :create, :destroy], state: "Current"
+  version [ "1" ], only: [ :index, :create, :destroy ], state: "Current"
 
   def index
     EndPointBlank::Writers::LogWriter.info("Fetching students list")
