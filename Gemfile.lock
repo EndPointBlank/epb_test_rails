@@ -1,8 +1,8 @@
 GIT
   remote: https://github.com/EndPointBlank/end_point_blank_rails.git
-  revision: e4fd7b1c51f3334a6dbda97504d4881d7ae3371a
+  revision: 1362c062107806218ba4784058fd89cb8cb3d4e9
   specs:
-    end_point_blank (0.3.0)
+    end_point_blank (0.4.0)
       base64
       excon (~> 1.0)
       rack (>= 3.2.6)
@@ -118,7 +118,7 @@ GEM
     ed25519 (1.4.0)
     erb (6.0.6)
     erubi (1.13.1)
-    excon (1.6.0)
+    excon (1.7.0)
       logger
     globalid (1.4.0)
       activesupport (>= 6.1)
