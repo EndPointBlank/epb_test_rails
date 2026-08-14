@@ -17,7 +17,7 @@ gem "stimulus-rails"
 # Build JSON APIs with ease [https://github.com/rails/jbuilder]
 gem "jbuilder"
 
-gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_rails.git", tag: "v0.6.0"
+gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_rails.git", tag: "v0.2.2"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"
