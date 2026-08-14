@@ -1,13 +1,13 @@
 GIT
   remote: https://github.com/EndPointBlank/end_point_blank_rails.git
-  revision: cc5d2e2606f6a176f073b9d0467f3f50c8c1d226
-  tag: v0.2.2
+  revision: 67ab630589f5e9f032b7bd70e769cad7021b5b7a
+  tag: v0.6.0
   specs:
-    end_point_blank (0.2.2)
+    end_point_blank (0.6.0)
       base64
       excon (~> 1.0)
-      rack
-      rexml
+      rack (>= 3.2.6)
+      rexml (>= 3.3.9)
 
 GEM
   remote: https://rubygems.org/
