@@ -5,6 +5,23 @@ updates:
   schedule:
     interval: daily
   open-pull-requests-limit: 10
+  ignore:
+    # end_point_blank is a git dependency pinned to an exact tag, and moving it
+    # is a coordinated release across five apps and the intake service -- not a
+    # routine dependency bump.
+    #
+    # Dependabot also gets the direction wrong here. It has repeatedly opened
+    # "Bump end_point_blank from v0.6.0 to v0.2.2", which is a DOWNGRADE across
+    # a breaking change: v0.2.2 predates the switch from `hostname` to
+    # `base_url`, so on that version every token mint gets
+    # 400 Missing required parameter: base_url from intake.
+    #
+    # One of those was merged (#43) and reverted a working bump; #47 was opened
+    # fresh, hours after v0.6.0 was tagged and published, and proposed the same
+    # downgrade again. The PR title reads as an upgrade because the "from" side
+    # re-renders against current master while the target stays whatever
+    # Dependabot picked -- so it looks routine right up until it breaks.
+    - dependency-name: "end_point_blank"
 - package-ecosystem: github-actions
   directory: "/"
   schedule:
