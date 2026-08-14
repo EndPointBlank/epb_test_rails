@@ -16,8 +16,14 @@ fi
 bundle binstubs bundler --force
 bundle install
 
-# Bundler caches the git-pinned end_point_blank gem by SHA; force a refresh so
-# updates pushed to master are picked up.
-bundle update end_point_blank
+# Re-resolve the SDK through the Gemfile. Bundler caches a git dep by SHA, so
+# without this a stale checkout can keep an old revision after the Gemfile
+# changes.
+#
+# This no longer picks up "updates pushed to master", as it once did and as this
+# comment used to claim: the Gemfile pins an exact tag, so this re-resolves to
+# that same tag. That is the point -- this script runs on deploy, and a deploy
+# taking whatever the SDK's master happened to be was never safe. Verified: with
+# the tag pinned, this leaves Gemfile.lock unchanged.
 
 bundle exec rake db:migrate
