@@ -1,7 +1,16 @@
 require "active_support/core_ext/integer/time"
 
 Rails.application.configure do
-  config.secret_key_base = ENV.fetch("SECRET_KEY_BASE")
+  # secret_key_base is deliberately NOT set here. Rails resolves it from
+  # SECRET_KEY_BASE (or credentials) on its own and still raises at boot if it
+  # is genuinely missing, so the loud failure is kept -- while the docker build
+  # can precompile assets without a real secret.
+  #
+  # An explicit `ENV.fetch("SECRET_KEY_BASE")` here DEFEATS Rails' own
+  # SECRET_KEY_BASE_DUMMY=1 build mechanism (Dockerfile): the fetch raises
+  # KeyError before Rails ever consults the flag. That is what broke every
+  # `Build and push image` run on master from 2026-09-06 onward, leaving this
+  # repo the only one of the five test apps with no image in ECR.
 
   # Settings specified here will take precedence over those in config/application.rb.
 
