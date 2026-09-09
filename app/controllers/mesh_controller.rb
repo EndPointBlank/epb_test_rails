@@ -8,6 +8,17 @@
 #                          deliberately NOT granted, so that a refusal can be
 #                          observed. Identical behaviour if it is ever reached.
 #
+# THE PATH IS PRESERVED ACROSS HOPS. Whichever of the two a request arrives
+# on, the downstream call is made onto that same path -- reports relays to
+# reports, relay relays to relay.
+#
+# That matters for the negative control specifically. If `reports` is wrongly
+# granted at hop one, forwarding it onto /mesh/relay would convert a
+# provisioning error into ordinary successful relay traffic and the whole run
+# would look clean. Preserving the path keeps it failing, and loud, at every
+# hop. The path comes from Mesh::PATHS, which is also what registers the
+# routes, so the two cannot disagree.
+#
 # Both inherit AuthenticatedController, so both sit behind exactly the same
 # EndPointBlank authorization as the demo CRUD routes. Exercising that
 # authorization is the point; an unprotected relay endpoint would prove
@@ -41,6 +52,7 @@ class MeshController < AuthenticatedController
   def render_relay
     status, body = Mesh::Relay.new.call(
       hops_header: request.headers[Mesh::HOPS_HEADER],
+      path: Mesh.path_for(action_name),
       run: request.headers[Mesh::RUN_HEADER],
       payload: payload_param
     )

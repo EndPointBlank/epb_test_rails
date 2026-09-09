@@ -11,6 +11,12 @@ require "test_helper"
 class MeshControllerTest < ActionDispatch::IntegrationTest
   DOWNSTREAM = "https://epb-test-ex.example.test"
 
+  # Written out rather than read from Mesh::PATHS: these are the paths the
+  # contract names, and a test that derived them from the implementation could
+  # not notice the implementation changing them.
+  RELAY_PATH = "/mesh/relay"
+  REPORTS_PATH = "/mesh/reports"
+
   # Records every downstream call and answers however the test told it to.
   class Peer
     attr_reader :calls
@@ -22,9 +28,39 @@ class MeshControllerTest < ActionDispatch::IntegrationTest
       @calls = []
     end
 
-    def post(base_url:, hops:, run:, payload:)
-      @calls << { base_url: base_url, hops: hops, run: run, payload: payload }
+    def post(base_url:, path:, hops:, run:, payload:)
+      @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
       Mesh::Downstream::Response.new(status: @status, body: @error ? nil : @body, error: @error)
+    end
+  end
+
+  # A peer provisioned the way sc-263 actually provisions the ring: `core` is
+  # granted, `reports` is not. It answers by path, so a relay call succeeds and
+  # a reports call is refused by the peer's own authorization layer.
+  class PathSensitivePeer
+    attr_reader :calls
+
+    def initialize(granted: [ RELAY_PATH ])
+      @granted = granted
+      @calls = []
+    end
+
+    def post(base_url:, path:, hops:, run:, payload:)
+      @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
+
+      if @granted.include?(path)
+        Mesh::Downstream::Response.new(
+          status: 200,
+          body: { "app" => "epb_test_ex", "hops_received" => hops, "terminated" => true },
+          error: nil
+        )
+      else
+        Mesh::Downstream::Response.new(
+          status: 403,
+          body: nil,
+          error: "Authorization failed: endpoint not granted to this application"
+        )
+      end
     end
   end
 
@@ -158,6 +194,7 @@ class MeshControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_equal 1, peer.calls.length
     assert_equal DOWNSTREAM, peer.calls.first[:base_url]
+    assert_equal RELAY_PATH, peer.calls.first[:path]
     assert_equal 2, peer.calls.first[:hops]
     assert_equal "run-7", peer.calls.first[:run]
     assert_equal "p", peer.calls.first[:payload]
@@ -180,6 +217,51 @@ class MeshControllerTest < ActionDispatch::IntegrationTest
     assert_equal 1, peer.calls.length
     assert_equal 1, peer.calls.first[:hops]
     assert_equal 2, body["hops_received"]
+  end
+
+  test "a reports request is forwarded onto the downstream reports endpoint" do
+    # The path is preserved across hops. Forwarding reports onto /mesh/relay
+    # would launder the negative control into ordinary relay traffic the moment
+    # it was wrongly granted at hop one.
+    peer = Peer.new
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: peer) { post "/mesh/reports", headers: { "X-EPB-Test-Hops" => "2" } }
+    end
+
+    assert_response :success
+    assert_equal REPORTS_PATH, peer.calls.first[:path]
+    assert_equal DOWNSTREAM, peer.calls.first[:base_url]
+  end
+
+  test "a downstream that grants relay but refuses reports fails loudly instead of relaying" do
+    # The exact provisioning failure the preserved-path rule exists for: this
+    # application is wrongly granted `reports` at hop one, so the request gets
+    # in. Because the path survives, the next hop -- provisioned correctly --
+    # refuses it, and the entry point answers 502 rather than a clean 200 with
+    # a successful relay nested inside it.
+    peer = PathSensitivePeer.new(granted: [ RELAY_PATH ])
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: peer) { post "/mesh/reports", headers: { "X-EPB-Test-Hops" => "3" } }
+    end
+
+    assert_response :bad_gateway
+    assert_equal REPORTS_PATH, peer.calls.first[:path]
+    assert_equal "downstream_failed", body["error"]
+    assert_equal 403, body["downstream_status"]
+    assert_equal 3, body["hops_received"]
+    assert_includes body["downstream_error"], "not granted"
+    refute body.key?("downstream"), "a laundered relay must not be nested under a refused reports call"
+
+    # And the same peer relays a /mesh/relay call perfectly well, so the 502
+    # above is the path being preserved and not a broken peer.
+    relay_peer = PathSensitivePeer.new(granted: [ RELAY_PATH ])
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: relay_peer) { post "/mesh/relay", headers: { "X-EPB-Test-Hops" => "3" } }
+    end
+
+    assert_response :success
+    assert_equal RELAY_PATH, relay_peer.calls.first[:path]
+    assert_equal "epb_test_ex", body["downstream"]["app"]
   end
 
   test "a clamped budget is reported as the clamp, and forwards one below it" do
@@ -252,5 +334,29 @@ class MeshControllerTest < ActionDispatch::IntegrationTest
     assert_routing({ method: :post, path: "/mesh/reports" }, { controller: "mesh", action: "reports" })
     get "/mesh/relay"
     assert_response :not_found
+  end
+
+  test "the registered routes and the forwarded paths are the same definition" do
+    # The forwarded path must EQUAL the inbound path, so the route this
+    # application answers and the path it calls downstream come from
+    # Mesh::PATHS and nowhere else. Pinned against the contract's literals
+    # here, once, so the rest of the suite can use the constant freely.
+    assert_equal({ "relay" => RELAY_PATH, "reports" => REPORTS_PATH }, Mesh::PATHS)
+
+    Mesh::PATHS.each do |action, path|
+      assert_routing({ method: :post, path: path }, { controller: "mesh", action: action })
+      assert_equal path, Mesh.path_for(action)
+    end
+  end
+
+  test "the mesh endpoints are mounted at the root, because the mount is part of the wire contract" do
+    # A prefix -- an engine at /api/mesh, say -- would make every next hop 404,
+    # and with the path preserved it would do so for both endpoints rather than
+    # only for reports. Cheap to assert, and it fails as a routing problem
+    # rather than surfacing later as an inexplicable authorization one.
+    Mesh::PATHS.each_value do |path|
+      assert_equal 2, path.count("/"), "#{path} must be rooted, not mounted under a prefix"
+      assert path.start_with?("/mesh/"), "#{path} must be served at the root"
+    end
   end
 end

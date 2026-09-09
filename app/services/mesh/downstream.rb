@@ -6,12 +6,6 @@ module Mesh
   # The one place this application speaks HTTP to the next application in the
   # ring.
   class Downstream
-    # The base URL names the application; the path is ours to append. Both
-    # inbound endpoints relay onto /mesh/relay -- /mesh/reports is the
-    # negative control, and what it exists to prove is a refusal at the entry
-    # point, not a second flavour of chain.
-    RELAY_PATH = "/mesh/relay"
-
     CONNECT_TIMEOUT = 3
     READ_TIMEOUT = 10
 
@@ -57,12 +51,16 @@ module Mesh
     # counts.
     #
     # @param base_url [String] the next application's base URL
+    # @param path [String] the mesh path to call, which is the path the
+    #   request being relayed arrived on. The base URL names the application;
+    #   this names the endpoint, and it is the caller's to choose precisely so
+    #   that /mesh/reports keeps relaying onto /mesh/reports.
     # @param hops [Integer] the already-decremented budget to forward
     # @param run [String, nil] forwarded verbatim; omitted entirely when nil
     # @param payload [String, nil] opaque, forwarded
     # @return [Response]
-    def post(base_url:, hops:, run:, payload:)
-      url = relay_url(base_url)
+    def post(base_url:, path:, hops:, run:, payload:)
+      url = peer_url(base_url, path)
 
       response = Excon.post(
         url,
@@ -81,8 +79,11 @@ module Mesh
 
     private
 
-    def relay_url(base_url)
-      "#{base_url.to_s.sub(%r{/+\z}, "")}#{RELAY_PATH}"
+    # A trailing slash on the base URL must not double the separator, and the
+    # path keeps exactly one leading one, so the same peer answers whether the
+    # deployment configured "https://host" or "https://host/".
+    def peer_url(base_url, path)
+      "#{base_url.to_s.sub(%r{/+\z}, "")}/#{path.to_s.sub(%r{\A/+}, "")}"
     end
 
     def request_headers(url, hops, run)
