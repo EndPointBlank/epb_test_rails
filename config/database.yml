@@ -12,6 +12,23 @@ development:
 test:
   <<: *default
   database: epb_test_rails_test
+  # Do not let libpq negotiate GSSAPI encryption (sc-271).
+  #
+  # `parallelize` forks a worker per core and each worker opens its own
+  # connection. Before libpq offers GSSAPI it calls pg_GSS_have_cred_cache,
+  # which walks the Kerberos credential cache; on macOS that walk talks to the
+  # Kerberos daemon over XPC, and an XPC connection inherited across fork() is
+  # unusable -- the child segfaults inside connect_start rather than
+  # connecting. That made `bin/rails test` die on Apple silicon as soon as the
+  # suite crossed minitest's 50-test parallelization threshold. It reproduces
+  # on every arm64 build of pg we tried (1.6.0-1.6.3, bundled libpq 17 and 18,
+  # and a source build against Homebrew's libpq), so it is a platform bug
+  # rather than a gem-version bug and pinning pg does not help.
+  #
+  # Declining GSSAPI skips that lookup entirely and the forked workers connect
+  # normally. Nothing here authenticates with Kerberos, and this is unrelated
+  # to TLS -- sslmode is a separate setting and is untouched.
+  gssencmode: disable
 
 production:
   <<: *default
