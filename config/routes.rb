@@ -7,6 +7,12 @@ Rails.application.routes.draw do
   resources :staff, only: [ :index, :create, :destroy ]
   resources :errors, only: [ :index ]
 
+  # The hop-budget mesh (sc-263 / sc-264). Both endpoints go through the same
+  # EndPointBlank authorization as the routes above; /mesh/reports is the
+  # negative control and is expected to be refused.
+  post "mesh/relay" => "mesh#relay"
+  post "mesh/reports" => "mesh#reports"
+
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.

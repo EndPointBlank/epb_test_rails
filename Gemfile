@@ -19,6 +19,12 @@ gem "jbuilder"
 
 gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_rails.git", tag: "v0.6.0"
 
+# The mesh relay (app/services/mesh) calls the next application in the ring
+# over HTTP. Excon arrives anyway as an end_point_blank dependency, but this
+# application now requires it in its own right, so it is declared rather than
+# borrowed.
+gem "excon", "~> 1.0"
+
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"
 
