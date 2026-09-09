@@ -21,16 +21,19 @@ class MeshControllerTest < ActionDispatch::IntegrationTest
   class Peer
     attr_reader :calls
 
-    def initialize(status: 200, body: nil, error: nil)
+    def initialize(status: 200, body: nil, error: nil, origin: nil)
       @status = status
       @body = body || { "app" => "epb_test_ex", "hops_received" => 0, "terminated" => true }
       @error = error
+      @origin = origin
       @calls = []
     end
 
     def post(base_url:, path:, hops:, run:, payload:)
       @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
-      Mesh::Downstream::Response.new(status: @status, body: @error ? nil : @body, error: @error)
+      Mesh::Downstream::Response.new(
+        status: @status, body: @error ? nil : @body, error: @error, origin: @origin
+      )
     end
   end
 
@@ -325,6 +328,73 @@ class MeshControllerTest < ActionDispatch::IntegrationTest
     assert_response :bad_gateway
     assert_equal "downstream_failed", body["error"]
     assert_nil body["downstream_status"]
+  end
+
+  # --- origin, over HTTP (sc-290) -------------------------------------------
+
+  test "a 502 names who refused, in origin, as well as what this hop called" do
+    peer = Peer.new(status: 403, error: "Authorization failed: endpoint not granted")
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: peer) { post "/mesh/relay", headers: { "X-EPB-Test-Hops" => "2" } }
+    end
+
+    assert_response :bad_gateway
+    # Per-hop, unchanged by sc-290.
+    assert_equal 403, body["downstream_status"]
+    # End-to-end, and serialized as a real JSON object rather than a string.
+    assert_equal "epb_test_rails", body["origin"]["app"]
+    assert_equal 403, body["origin"]["status"]
+    assert_equal 2, body["origin"]["hops_received"]
+    assert_includes body["origin"]["error"], "endpoint not granted"
+  end
+
+  test "an origin from further down survives the whole controller unchanged" do
+    deep = { "app" => "epb_test_js", "status" => 403, "hops_received" => 1, "error" => "access_denied" }
+    peer = Peer.new(status: 502, error: "the hop below answered 502", origin: deep)
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: peer) { post "/mesh/relay", headers: { "X-EPB-Test-Hops" => "4" } }
+    end
+
+    assert_response :bad_gateway
+    assert_equal deep, body["origin"], "the deepest failure going up wins"
+    assert_equal 502, body["downstream_status"], "and the per-hop status is still this hop's"
+    assert_equal 4, body["hops_received"]
+  end
+
+  test "a transport failure attributes itself with a null origin status" do
+    peer = Peer.new(status: nil, error: "Excon::Error::Timeout: read timeout reached")
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: peer) { post "/mesh/relay", headers: { "X-EPB-Test-Hops" => "1" } }
+    end
+
+    assert_response :bad_gateway
+    assert_equal "epb_test_rails", body["origin"]["app"]
+    assert_nil body["origin"]["status"]
+    assert_equal 1, body["origin"]["hops_received"]
+  end
+
+  test "a successful relay answers with no origin key at all" do
+    with_env("EPB_MESH_DOWNSTREAM_URL" => DOWNSTREAM) do
+      with_epb(peer: Peer.new) { post "/mesh/relay", headers: { "X-EPB-Test-Hops" => "2" } }
+    end
+
+    assert_response :success
+    refute body.key?("origin"), "there is nothing to attribute on the happy path"
+  end
+
+  test "the unconfigured-downstream 500 is unchanged, and carries no origin" do
+    # It is not a downstream failure: no request left, nothing refused, and
+    # nothing for sc-265 to count as a refusal. The contract enumerates this
+    # body exactly -- app, hops_received, error, message -- so origin stays off
+    # it, the same way terminated does.
+    with_env("EPB_MESH_DOWNSTREAM_URL" => nil) do
+      with_epb { post "/mesh/relay", headers: { "X-EPB-Test-Hops" => "2" } }
+    end
+
+    assert_response :internal_server_error
+    assert_equal %w[app hops_received error message].sort, body.keys.sort
+    refute body.key?("origin")
+    refute body.key?("terminated")
   end
 
   # --- routing --------------------------------------------------------------

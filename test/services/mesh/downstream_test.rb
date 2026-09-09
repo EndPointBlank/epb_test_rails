@@ -206,4 +206,73 @@ class Mesh::DownstreamTest < ActiveSupport::TestCase
 
     assert_equal 500, response.error.length
   end
+
+  # --- origin (sc-290) ------------------------------------------------------
+
+  ORIGIN = { "app" => "epb_test_py", "status" => 403, "hops_received" => 1, "error" => "access_denied" }.freeze
+
+  test "an origin already carried by a failure body is recovered, verbatim" do
+    stub_peer(status: 502, body: { "error" => "downstream_failed", "origin" => ORIGIN }.to_json)
+    response = downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil)
+
+    refute response.ok?
+    assert_equal 502, response.status, "the per-hop status is still what THIS call got"
+    assert_equal ORIGIN, response.origin
+  end
+
+  test "the origin is read out of the untruncated body, which is the whole point" do
+    # This is the failure sc-290 fixes. The nested error is capped at 500
+    # characters against roughly 110 characters of envelope per level, so by
+    # about four hops down the original status has been truncated away. Reading
+    # origin off the PARSED body -- before the truncation that produces
+    # `error` -- is what makes it survive any depth.
+    padding = "y" * 5_000
+    stub_peer(status: 502, body: { "downstream_error" => padding, "origin" => ORIGIN }.to_json)
+    response = downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil)
+
+    assert_equal 500, response.error.length, "the nested error is truncated, as before"
+    refute_includes response.error, "epb_test_py", "and the origin is NOT recoverable from it"
+    assert_equal ORIGIN, response.origin, "but it is recovered anyway"
+  end
+
+  test "a failure body with no origin has none to recover" do
+    stub_peer(status: 403, body: { "error" => "endpoint not granted" }.to_json)
+    response = downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil)
+
+    assert_nil response.origin, "a leaf refusal is attributed by the hop that observed it"
+  end
+
+  test "a failure body that is not JSON, or not an object, carries no origin" do
+    [ "<html>a load balancer error page</html>", "null", "[1, 2, 3]", "" ].each do |body|
+      stub_peer(status: 502, body: body)
+      response = downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil)
+
+      assert_nil response.origin, "#{body.inspect} must not yield an origin"
+      assert_equal 502, response.status
+    end
+  end
+
+  test "an origin that is not an object is treated as absent rather than forwarded" do
+    # Forwarding a malformed one verbatim would put a shape the contract does
+    # not describe in front of sc-265, which counts refusals off this field.
+    # The observing hop's own origin is both well formed and true.
+    [ "nonsense", 403, [ "epb_test_py" ], nil ].each do |malformed|
+      stub_peer(status: 502, body: { "origin" => malformed }.to_json)
+      response = downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil)
+
+      assert_nil response.origin, "origin: #{malformed.inspect} must not be forwarded"
+    end
+  end
+
+  test "a successful response carries no origin, and neither does a transport failure" do
+    stub_peer(status: 200, body: { "app" => "epb_test_ex" }.to_json)
+    assert_nil downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil).origin
+
+    Excon.stubs.clear
+    stub_peer_raising(Excon::Error::Timeout.new("read timeout reached"))
+    response = downstream.post(base_url: BASE, path: RELAY_PATH, hops: 1, run: nil, payload: nil)
+
+    assert_nil response.status, "a timeout has no status"
+    assert_nil response.origin, "and no body to recover an origin from -- the caller is the observer"
+  end
 end

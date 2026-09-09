@@ -16,7 +16,11 @@ module Mesh
     #          (connection error, timeout).
     # body::   the downstream response body, parsed, on success.
     # error::  why the call is not usable, on failure.
-    Response = Struct.new(:status, :body, :error, keyword_init: true) do
+    # origin:: the origin object the downstream failure already carried, if it
+    #          had one -- i.e. the failure was observed deeper than here and
+    #          has already been attributed. nil means this hop is the observer.
+    #          See Mesh::Origin.
+    Response = Struct.new(:status, :body, :error, :origin, keyword_init: true) do
       def ok?
         status == 200 && error.nil?
       end
@@ -70,12 +74,73 @@ module Mesh
         read_timeout: READ_TIMEOUT
       )
 
-      interpret(response)
+      self.class.interpret(response.status, response.body)
     rescue Excon::Error => e
       # Excon::Error::Timeout covers both timeouts and Excon::Error::Socket
       # covers connection failures; both are Excon::Error.
-      Response.new(status: nil, body: nil, error: truncate("#{e.class}: #{e.message}"))
+      self.class.transport_failure("#{e.class}: #{e.message}")
     end
+
+    # Map a downstream (status, raw body) pair onto a Response.
+    #
+    # Public, and on the class rather than the instance, because the ring rig
+    # in the relay tests answers through EXACTLY this. `origin` only survives
+    # depth because it is read out of the PARSED body before that body is
+    # truncated into `error`; a test double that mapped its own answer some
+    # other way would demonstrate the opposite of what it claims.
+    #
+    # @param status [Integer, nil]
+    # @param raw [String, nil] the response body as it came off the wire
+    # @return [Response]
+    def self.interpret(status, raw)
+      body = raw.to_s
+
+      unless status == 200
+        return Response.new(
+          status: status,
+          body: nil,
+          error: truncate(body),
+          origin: Origin.extract(parse_or_nil(body))
+        )
+      end
+
+      Response.new(status: status, body: JSON.parse(body), error: nil, origin: nil)
+    rescue JSON::ParserError => e
+      # A 200 carrying something that is not JSON is not a chain link; it is
+      # more likely a proxy's error page. Reporting it as a failure keeps it
+      # from nesting as a silently empty success.
+      Response.new(
+        status: status,
+        body: nil,
+        error: truncate("downstream answered #{status} but the body was not JSON: #{e.message}"),
+        origin: nil
+      )
+    end
+
+    # A failure with no HTTP status at all: a connect error or a timeout.
+    # There is no body, so there is no origin to recover and this hop is
+    # necessarily the observer -- Mesh::Relay sets one, with a null status.
+    #
+    # @param message [String]
+    # @return [Response]
+    def self.transport_failure(message)
+      Response.new(status: nil, body: nil, error: truncate(message), origin: nil)
+    end
+
+    def self.parse_or_nil(body)
+      JSON.parse(body)
+    rescue JSON::ParserError
+      # A failure body that is not JSON simply carries no origin. It is not
+      # itself an error: the downstream may be a proxy that never reached the
+      # peer at all.
+      nil
+    end
+    private_class_method :parse_or_nil
+
+    def self.truncate(value)
+      value.to_s[0, MAX_ERROR_LENGTH]
+    end
+    private_class_method :truncate
 
     private
 
@@ -99,28 +164,6 @@ module Mesh
 
     def request_body(payload)
       payload.nil? ? "{}" : { payload: payload }.to_json
-    end
-
-    def interpret(response)
-      status = response.status
-      raw = response.body.to_s
-
-      return Response.new(status: status, body: nil, error: truncate(raw)) unless status == 200
-
-      Response.new(status: status, body: JSON.parse(raw), error: nil)
-    rescue JSON::ParserError => e
-      # A 200 carrying something that is not JSON is not a chain link; it is
-      # more likely a proxy's error page. Reporting it as a failure keeps it
-      # from nesting as a silently empty success.
-      Response.new(
-        status: status,
-        body: nil,
-        error: truncate("downstream answered #{status} but the body was not JSON: #{e.message}")
-      )
-    end
-
-    def truncate(value)
-      value.to_s[0, MAX_ERROR_LENGTH]
     end
   end
 end
