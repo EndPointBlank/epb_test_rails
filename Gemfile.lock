@@ -367,6 +367,7 @@ DEPENDENCIES
   capybara
   debug
   end_point_blank!
+  excon (~> 1.0)
   importmap-rails
   jbuilder
   kamal
