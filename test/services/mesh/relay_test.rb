@@ -31,39 +31,67 @@ class Mesh::RelayTest < ActiveSupport::TestCase
   class RingPeer
     attr_reader :calls
 
-    def initialize(downstream_url: DOWNSTREAM)
+    # app_name:: what each simulated node calls itself. A callable is handed
+    #   that node's own budget, so a ring can give every depth a distinct
+    #   identity -- which is how the origin tests tell the deep node apart from
+    #   the intermediate ones rather than merely apart from the entry point.
+    # deepest:: an alternative downstream for the node that makes the LAST call
+    #   in the chain, i.e. the one whose own budget is 1. That is how a failure
+    #   is planted at the FAR end of the ring instead of next door, which is
+    #   the case `origin` exists for.
+    def initialize(downstream_url: DOWNSTREAM, app_name: "epb_test_peer", deepest: nil)
       @calls = []
       @downstream_url = downstream_url
+      @app_name = app_name
+      @deepest = deepest
     end
 
     def post(base_url:, path:, hops:, run:, payload:)
       @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
 
       status, body = Mesh::Relay.new(
-        app_name: "epb_test_peer",
+        app_name: name_for(hops),
         downstream_url: @downstream_url,
-        downstream: self
+        downstream: downstream_for(hops)
       ).call(hops_header: hops.to_s, path: path, run: run, payload: payload)
 
-      # The real downstream hands back parsed JSON, i.e. string keys. Round
-      # trip so this stub cannot make the caller look better than it is.
-      Mesh::Downstream::Response.new(status: status, body: JSON.parse(body.to_json), error: nil)
+      # A real peer answers over HTTP, so the nested answer is mapped back
+      # through EXACTLY the production mapping -- string keys, and the
+      # 500-character truncation of the error that `origin` exists to survive.
+      # A rig that handed the body straight back untruncated would prove the
+      # opposite of what these tests claim.
+      Mesh::Downstream.interpret(status, body.to_json)
+    end
+
+    private
+
+    def name_for(hops)
+      @app_name.respond_to?(:call) ? @app_name.call(hops) : @app_name
+    end
+
+    def downstream_for(hops)
+      @deepest && hops == 1 ? @deepest : self
     end
   end
 
   # A peer that always fails, the way a refusal or an unreachable host does.
+  #
+  # `origin` is how it says whether the failure has ALREADY been attributed
+  # deeper down: nil is a leaf refusal, and a hash is the shape a hop below
+  # produces once its own downstream call has failed.
   class FailingPeer
     attr_reader :calls
 
-    def initialize(status:, error:)
+    def initialize(status:, error:, origin: nil)
       @status = status
       @error = error
+      @origin = origin
       @calls = []
     end
 
     def post(base_url:, path:, hops:, run:, payload:)
       @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
-      Mesh::Downstream::Response.new(status: @status, body: nil, error: @error)
+      Mesh::Downstream::Response.new(status: @status, body: nil, error: @error, origin: @origin)
     end
   end
 
@@ -303,6 +331,132 @@ class Mesh::RelayTest < ActiveSupport::TestCase
     assert_equal "downstream_failed", body[:error]
     assert_nil body[:downstream_status]
     assert_includes body[:downstream_error], "Timeout"
+  end
+
+  # --- origin: who refused, recoverable at the entry point (sc-290) ---------
+
+  # The origin an already-attributed downstream failure arrives with. String
+  # keys, because it comes off the wire as parsed JSON, and one key this
+  # application has never heard of, because "verbatim" has to mean the whole
+  # object and not the four fields today's contract lists.
+  DEEP_ORIGIN = {
+    "app" => "epb_test_py",
+    "status" => 403,
+    "hops_received" => 1,
+    "error" => "access_denied",
+    "observed_at" => "2026-09-09T00:00:00Z"
+  }.freeze
+
+  test "the hop whose own downstream call failed sets the origin, with its own name and budget" do
+    peer = FailingPeer.new(status: 403, error: "Authorization failed: endpoint not granted")
+    _status, body = relay(downstream: peer).call(hops_header: "2", path: RELAY_PATH, run: nil, payload: nil)
+
+    # The observer, not the refuser: this application is the only participant
+    # that reliably knows both the status it received and its own identity.
+    assert_equal "epb_test_rails", body[:origin][:app]
+    assert_equal 403, body[:origin][:status]
+    assert_equal 2, body[:origin][:hops_received], "the OBSERVING hop's own budget"
+    assert_includes body[:origin][:error], "endpoint not granted"
+  end
+
+  test "an origin arriving from downstream is forwarded verbatim and never overwritten" do
+    # THE RULE MOST LIKELY TO BE GOT WRONG. Getting it wrong does not raise or
+    # look broken: it rewrites a refusal that happened far away as one that
+    # happened next door, and sc-265 counts refusals off this exact field. So
+    # it is asserted head-on, not implied by a chain test.
+    peer = FailingPeer.new(status: 502, error: "the hop below answered 502", origin: DEEP_ORIGIN)
+    status, body = relay(downstream: peer).call(hops_header: "4", path: RELAY_PATH, run: nil, payload: nil)
+
+    assert_equal 502, status
+    assert_equal DEEP_ORIGIN, body[:origin], "the whole object survives, unknown keys included"
+
+    # Every field this application could have substituted, and did not.
+    refute_equal "epb_test_rails", body[:origin]["app"], "the observer is NOT this hop"
+    refute_equal 502, body[:origin]["status"], "the per-hop status must not displace the origin one"
+    refute_equal 4, body[:origin]["hops_received"], "this hop's own budget is not the origin's"
+
+    # And its own per-hop fields are untouched by the forwarding.
+    assert_equal "epb_test_rails", body[:app]
+    assert_equal 4, body[:hops_received]
+    assert_equal 502, body[:downstream_status]
+  end
+
+  test "a chain carries the DEEPEST hop's origin all the way to the entry point" do
+    # The ring, with a refusal planted at the far end: this application at
+    # budget 4, three peers below it, and the last of those -- the only one
+    # whose own budget is 1 -- refused. Every hop between it and here has an
+    # origin to forward and must not touch it.
+    refusal = "Authorization failed: endpoint not granted to this application. #{"detail " * 60}"
+    peer = RingPeer.new(app_name: ->(hops) { "epb_test_peer_#{hops}" }, deepest: FailingPeer.new(status: 403, error: refusal))
+
+    status, body = relay(downstream: peer).call(hops_header: "4", path: RELAY_PATH, run: nil, payload: nil)
+
+    assert_equal 502, status
+    assert_equal 3, peer.calls.length, "hops 3, 2 and 1; the refusal is below all of them"
+
+    # Per-hop, unchanged: what THIS application called answered 502.
+    assert_equal 502, body[:downstream_status]
+
+    # End-to-end: the deep node, not the one next door. Keys are normalised so
+    # that a hop which substituted its own origin fails ON THE NAME rather than
+    # on a key type; the verbatim-forwarding test above pins the shape.
+    origin = body[:origin].transform_keys(&:to_s)
+    assert_equal "epb_test_peer_1", origin["app"]
+    assert_equal 403, origin["status"]
+    assert_equal 1, origin["hops_received"]
+    refute_equal "epb_test_peer_3", origin["app"], "the hop next door is not the origin"
+    refute_equal "epb_test_rails", origin["app"], "and neither is the entry point"
+
+    # Depth is derivable at the entry point without any hop knowing the entry
+    # budget: 4 - 1 == three hops down.
+    assert_equal 3, 4 - origin["hops_received"]
+
+    # And the reason origin has to exist at all: the nested walk this replaces
+    # is already destroyed at this depth. downstream_error is a truncated
+    # fragment, not a document anything can read a status out of.
+    assert_equal Mesh::Downstream::MAX_ERROR_LENGTH, body[:downstream_error].length
+    assert_raises(JSON::ParserError) { JSON.parse(body[:downstream_error]) }
+  end
+
+  test "the origin error is capped at 200 characters" do
+    peer = FailingPeer.new(status: 403, error: "x" * 5_000)
+    _status, body = relay(downstream: peer).call(hops_header: "1", path: RELAY_PATH, run: nil, payload: nil)
+
+    assert_equal 200, Mesh::Origin::MAX_ERROR_LENGTH
+    assert_equal 200, body[:origin][:error].length
+
+    # origin bounds ITSELF. The per-hop field beside it is left exactly as the
+    # downstream boundary handed it over -- Mesh::Downstream applies the wider
+    # 500-character cap there, and origin takes nothing away from it.
+    assert_equal 5_000, body[:downstream_error].length
+  end
+
+  test "a transport failure has a null origin status, because there is no status" do
+    peer = FailingPeer.new(status: nil, error: "Excon::Error::Timeout: read timeout reached")
+    _status, body = relay(downstream: peer).call(hops_header: "3", path: RELAY_PATH, run: nil, payload: nil)
+
+    assert_equal "epb_test_rails", body[:origin][:app]
+    assert_nil body[:origin][:status], "a timeout has no HTTP status to attribute"
+    assert_equal 3, body[:origin][:hops_received]
+    assert_includes body[:origin][:error], "Timeout"
+  end
+
+  test "a successful relay carries no origin at all" do
+    # origin ADDS a field to failure responses. It must not appear on the happy
+    # path, where there is nothing to attribute and a chain is still described
+    # by its nesting.
+    _status, body = relay(downstream: RingPeer.new).call(hops_header: "3", path: RELAY_PATH, run: nil, payload: nil)
+
+    refute body.key?(:origin)
+    refute body[:downstream].key?("origin")
+  end
+
+  test "an exhausted budget carries no origin either" do
+    _status, body = relay(downstream: ForbiddenPeer.new).call(
+      hops_header: "0", path: RELAY_PATH, run: nil, payload: nil
+    )
+
+    refute body.key?(:origin)
   end
 
   # --- configuration --------------------------------------------------------

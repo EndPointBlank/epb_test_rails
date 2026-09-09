@@ -83,14 +83,41 @@ module Mesh
     # No terminated and no downstream key: a failed relay is neither a
     # termination nor a chain link, and sc-265 counts refusals rather than
     # dropping them.
+    #
+    # downstream_status and downstream_error keep their per-hop meaning
+    # exactly: they describe the call THIS application made. `origin` is added
+    # alongside them and replaces nothing -- locality and end-to-end
+    # attribution are both cheap, and neither is sufficient alone.
     def failed_body(hops, response)
       {
         app: @app_name,
         hops_received: hops,
         error: "downstream_failed",
         downstream_status: response.status,
-        downstream_error: response.error
+        downstream_error: response.error,
+        origin: origin_for(hops, response)
       }
+    end
+
+    # THE NON-OVERWRITE RULE.
+    #
+    # An origin already inside the downstream failure means the failure was
+    # observed deeper than here and has already been attributed. It is
+    # forwarded VERBATIM: first failure going up wins, and that is the deepest
+    # one. Only the hop whose OWN downstream call failed sets one.
+    #
+    # Overwriting it would not raise anything or look broken. It would quietly
+    # rewrite every refusal in the ring as having happened next door, and
+    # sc-265 counts refusals off exactly this field -- so the failure mode is
+    # confident, plausible, wrong attribution rather than an error. Hence the
+    # explicit tests.
+    def origin_for(hops, response)
+      response.origin || Origin.observed(
+        app: @app_name,
+        status: response.status,
+        hops_received: hops,
+        error: response.error
+      )
     end
   end
 end
