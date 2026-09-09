@@ -26,7 +26,39 @@ module Mesh
   # generated. Reserved for sc-265.
   RUN_HEADER = "X-EPB-Test-Run"
 
+  # The mesh endpoints, keyed by the MeshController action that serves them.
+  #
+  # THIS IS THE SINGLE DEFINITION. config/routes.rb registers exactly these
+  # paths and MeshController forwards onto exactly the one the request arrived
+  # on, so the route this application answers and the path it calls downstream
+  # cannot drift apart. Changing a path here changes both at once; there is
+  # nowhere else to forget.
+  #
+  # The mount point is part of the wire contract. Because the forwarded path
+  # must EQUAL the inbound path, these are absolute and rooted: an engine at
+  # /api/mesh or any other prefix would make the next hop 404.
+  PATHS = {
+    "relay" => "/mesh/relay",
+    "reports" => "/mesh/reports"
+  }.freeze
+
   module_function
+
+  # The path this application serves -- and therefore forwards onto -- for a
+  # given controller action.
+  #
+  # Deliberately not request.path: a format suffix (/mesh/relay.json), a
+  # proxy rewrite or a stray trailing slash would all be "the path it arrived
+  # on" and none of them is a path the next hop's router has. The action is
+  # the thing the router actually resolved, so it is what the next hop is
+  # asked for.
+  #
+  # @param action [String, Symbol] the controller action
+  # @return [String]
+  # @raise [KeyError] for an action that is not a mesh endpoint
+  def path_for(action)
+    PATHS.fetch(action.to_s)
+  end
 
   # This application's name for the `app` field.
   # @return [String]
@@ -34,8 +66,9 @@ module Mesh
     ENV["EPB_MESH_APP_NAME"].to_s.strip.presence || DEFAULT_APP_NAME
   end
 
-  # Base URL of the next application in the ring; the relay path is appended
-  # by the caller.
+  # Base URL of the next application in the ring; the path the request
+  # arrived on is appended by the caller -- see PATHS and the preserved-path
+  # rule.
   #
   # Read per request rather than memoised at boot: a load run may restage the
   # ring around a long-lived process, and nothing here is hot enough for an

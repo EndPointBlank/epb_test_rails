@@ -10,8 +10,14 @@ Rails.application.routes.draw do
   # The hop-budget mesh (sc-263 / sc-264). Both endpoints go through the same
   # EndPointBlank authorization as the routes above; /mesh/reports is the
   # negative control and is expected to be refused.
-  post "mesh/relay" => "mesh#relay"
-  post "mesh/reports" => "mesh#reports"
+  #
+  # Drawn from Mesh::PATHS rather than written out here, because the forwarded
+  # path must equal the inbound path: the route this application answers and
+  # the path MeshController calls downstream come from one definition and
+  # cannot drift apart.
+  Mesh::PATHS.each do |action, path|
+    post path => "mesh##{action}"
+  end
 
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 

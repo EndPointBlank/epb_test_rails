@@ -20,19 +20,26 @@ module Mesh
     end
 
     # @param hops_header [String, nil] the raw X-EPB-Test-Hops value
+    # @param path [String] the mesh path this request arrived on. Forwarded
+    #   unchanged: /mesh/reports relays onto /mesh/reports, so a wrongly
+    #   granted negative control keeps failing at every hop instead of turning
+    #   into ordinary relay traffic. Required, and required per call rather
+    #   than per instance, because it is a property of the request.
     # @param run [String, nil] the raw X-EPB-Test-Run value
     # @param payload [String, nil] the opaque payload to echo and forward
     # @return [Array(Integer, Hash)] the HTTP status and the response body
     # @raise [DownstreamNotConfiguredError] when the budget is live and no
     #   downstream target is configured
-    def call(hops_header:, run: nil, payload: nil)
+    def call(hops_header:, path:, run: nil, payload: nil)
       hops = HopBudget.parse(hops_header)
 
       return [ 200, terminated_body(hops, run, payload) ] if hops <= 0
 
       raise DownstreamNotConfiguredError.new(hops_received: hops) if @downstream_url.blank?
 
-      response = @downstream.post(base_url: @downstream_url, hops: hops - 1, run: run, payload: payload)
+      response = @downstream.post(
+        base_url: @downstream_url, path: path, hops: hops - 1, run: run, payload: payload
+      )
 
       if response.ok?
         [ 200, relayed_body(hops, run, payload, response) ]

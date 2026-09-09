@@ -13,9 +13,21 @@ require "test_helper"
 class Mesh::RelayTest < ActiveSupport::TestCase
   DOWNSTREAM = "https://epb-test-ex.example.test"
 
+  # Written out rather than read from Mesh::PATHS: these are the paths the
+  # contract names, and a test that derived them from the implementation could
+  # not notice the implementation changing them.
+  RELAY_PATH = "/mesh/relay"
+  REPORTS_PATH = "/mesh/reports"
+
   # A peer that is this same application. Every call it receives is recorded,
   # then handed to a fresh Relay wired back to this same object, so N nodes of
   # the ring are simulated by one counter.
+  #
+  # The recorded path is fed straight back into the nested Relay, exactly as a
+  # real peer's router would: a request that arrives on /mesh/reports is served
+  # by the peer's reports action, which relays onto reports again. If the
+  # implementation rewrote the path, this ring would show it changing at hop
+  # one and staying changed.
   class RingPeer
     attr_reader :calls
 
@@ -24,14 +36,14 @@ class Mesh::RelayTest < ActiveSupport::TestCase
       @downstream_url = downstream_url
     end
 
-    def post(base_url:, hops:, run:, payload:)
-      @calls << { base_url: base_url, hops: hops, run: run, payload: payload }
+    def post(base_url:, path:, hops:, run:, payload:)
+      @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
 
       status, body = Mesh::Relay.new(
         app_name: "epb_test_peer",
         downstream_url: @downstream_url,
         downstream: self
-      ).call(hops_header: hops.to_s, run: run, payload: payload)
+      ).call(hops_header: hops.to_s, path: path, run: run, payload: payload)
 
       # The real downstream hands back parsed JSON, i.e. string keys. Round
       # trip so this stub cannot make the caller look better than it is.
@@ -49,8 +61,8 @@ class Mesh::RelayTest < ActiveSupport::TestCase
       @calls = []
     end
 
-    def post(base_url:, hops:, run:, payload:)
-      @calls << { base_url: base_url, hops: hops, run: run, payload: payload }
+    def post(base_url:, path:, hops:, run:, payload:)
+      @calls << { base_url: base_url, path: path, hops: hops, run: run, payload: payload }
       Mesh::Downstream::Response.new(status: @status, body: nil, error: @error)
     end
   end
@@ -71,7 +83,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
   test "a budget of N produces exactly N downstream calls" do
     (0..6).each do |budget|
       peer = RingPeer.new
-      relay(downstream: peer).call(hops_header: budget.to_s, run: nil, payload: nil)
+      relay(downstream: peer).call(hops_header: budget.to_s, path: RELAY_PATH, run: nil, payload: nil)
 
       assert_equal budget, peer.calls.length,
         "budget #{budget} should make exactly #{budget} downstream calls"
@@ -79,7 +91,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
   end
 
   test "a budget of N touches N+1 applications, one deeper per hop" do
-    status, body = relay(downstream: RingPeer.new).call(hops_header: "4", run: nil, payload: nil)
+    status, body = relay(downstream: RingPeer.new).call(hops_header: "4", path: RELAY_PATH, run: nil, payload: nil)
 
     assert_equal 200, status
 
@@ -98,23 +110,62 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "the forwarded budget decrements by exactly one per hop, down to zero" do
     peer = RingPeer.new
-    relay(downstream: peer).call(hops_header: "5", run: nil, payload: nil)
+    relay(downstream: peer).call(hops_header: "5", path: RELAY_PATH, run: nil, payload: nil)
 
     assert_equal [ 4, 3, 2, 1, 0 ], peer.calls.map { |c| c[:hops] }
   end
 
   test "a clamped budget still terminates, at the clamp" do
     peer = RingPeer.new
-    relay(downstream: peer).call(hops_header: "1000000", run: nil, payload: nil)
+    relay(downstream: peer).call(hops_header: "1000000", path: RELAY_PATH, run: nil, payload: nil)
 
     assert_equal Mesh::HopBudget::MAX, peer.calls.length
+  end
+
+  # --- the path is preserved across hops ------------------------------------
+
+  test "the path a request arrived on is the path it is forwarded onto" do
+    [ RELAY_PATH, REPORTS_PATH ].each do |path|
+      peer = RingPeer.new
+      relay(downstream: peer).call(hops_header: "1", path: path, run: nil, payload: nil)
+
+      assert_equal [ path ], peer.calls.map { |c| c[:path] },
+        "a request on #{path} must be forwarded onto #{path}"
+    end
+  end
+
+  test "the path is preserved at every hop, not only the first" do
+    # This is the whole reason for the rule. /mesh/reports is a negative
+    # control on an API package sc-263 deliberately does not grant. If a hop
+    # rewrote it onto /mesh/relay, a reports request that was WRONGLY granted
+    # at hop one would turn into ordinary successful relay traffic from hop two
+    # onward and the run would look clean. Preserving it keeps the wrongly
+    # granted call hitting reports, and failing, at every hop.
+    [ RELAY_PATH, REPORTS_PATH ].each do |path|
+      peer = RingPeer.new
+      relay(downstream: peer).call(hops_header: "4", path: path, run: nil, payload: nil)
+
+      assert_equal [ path ] * 4, peer.calls.map { |c| c[:path] },
+        "#{path} must survive all four hops unchanged"
+    end
+  end
+
+  test "the two paths do not bleed into one another" do
+    relay_peer = RingPeer.new
+    reports_peer = RingPeer.new
+
+    relay(downstream: relay_peer).call(hops_header: "3", path: RELAY_PATH, run: nil, payload: nil)
+    relay(downstream: reports_peer).call(hops_header: "3", path: REPORTS_PATH, run: nil, payload: nil)
+
+    refute_includes relay_peer.calls.map { |c| c[:path] }, REPORTS_PATH
+    refute_includes reports_peer.calls.map { |c| c[:path] }, RELAY_PATH
   end
 
   # --- the terminating answer ----------------------------------------------
 
   test "an exhausted budget answers and calls nobody" do
     status, body = relay(downstream: ForbiddenPeer.new).call(
-      hops_header: "0", run: "run-1", payload: "hello"
+      hops_header: "0", path: RELAY_PATH, run: "run-1", payload: "hello"
     )
 
     assert_equal 200, status
@@ -131,7 +182,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "every zero case in the parse table terminates rather than calling downstream" do
     [ nil, "", "   ", "abc", "1.5", "0x4", "+4", "four", "-1", "-100", "0" ].each do |raw|
-      status, body = relay(downstream: ForbiddenPeer.new).call(hops_header: raw, run: nil, payload: nil)
+      status, body = relay(downstream: ForbiddenPeer.new).call(hops_header: raw, path: RELAY_PATH, run: nil, payload: nil)
 
       assert_equal 200, status, "#{raw.inspect} should answer 200"
       assert_equal true, body[:terminated], "#{raw.inspect} should terminate"
@@ -145,7 +196,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
     # Budget exhaustion and a missing target are different events. This one is
     # a normal answer; the other, below, is a 500.
     status, body = relay(downstream: ForbiddenPeer.new, downstream_url: nil).call(
-      hops_header: "0", run: nil, payload: nil
+      hops_header: "0", path: RELAY_PATH, run: nil, payload: nil
     )
 
     assert_equal 200, status
@@ -156,7 +207,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "a live budget nests the downstream response verbatim" do
     peer = RingPeer.new
-    status, body = relay(downstream: peer).call(hops_header: "2", run: "run-9", payload: "p")
+    status, body = relay(downstream: peer).call(hops_header: "2", path: RELAY_PATH, run: "run-9", payload: "p")
 
     assert_equal 200, status
     assert_equal "epb_test_rails", body[:app]
@@ -171,7 +222,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "the run identifier is forwarded verbatim and never generated" do
     peer = RingPeer.new
-    _status, body = relay(downstream: peer).call(hops_header: "3", run: "  Run/ID:7  ", payload: nil)
+    _status, body = relay(downstream: peer).call(hops_header: "3", path: RELAY_PATH, run: "  Run/ID:7  ", payload: nil)
 
     assert_equal [ "  Run/ID:7  " ] * 3, peer.calls.map { |c| c[:run] }
     assert_equal "  Run/ID:7  ", body[:run]
@@ -179,7 +230,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "an absent run identifier stays absent and is not invented" do
     peer = RingPeer.new
-    _status, body = relay(downstream: peer).call(hops_header: "2", run: nil, payload: nil)
+    _status, body = relay(downstream: peer).call(hops_header: "2", path: RELAY_PATH, run: nil, payload: nil)
 
     assert_equal [ nil, nil ], peer.calls.map { |c| c[:run] }
     assert_nil body[:run]
@@ -187,7 +238,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "the payload is echoed and forwarded" do
     peer = RingPeer.new
-    _status, body = relay(downstream: peer).call(hops_header: "1", run: nil, payload: "opaque")
+    _status, body = relay(downstream: peer).call(hops_header: "1", path: RELAY_PATH, run: nil, payload: "opaque")
 
     assert_equal [ "opaque" ], peer.calls.map { |c| c[:payload] }
     assert_equal "opaque", body[:payload]
@@ -199,7 +250,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
   test "a live budget with no downstream configured raises rather than stopping quietly" do
     error = assert_raises(Mesh::DownstreamNotConfiguredError) do
       relay(downstream: ForbiddenPeer.new, downstream_url: nil).call(
-        hops_header: "3", run: nil, payload: nil
+        hops_header: "3", path: RELAY_PATH, run: nil, payload: nil
       )
     end
 
@@ -211,7 +262,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
     [ "", "   " ].each do |blank|
       assert_raises(Mesh::DownstreamNotConfiguredError) do
         relay(downstream: ForbiddenPeer.new, downstream_url: blank).call(
-          hops_header: "1", run: nil, payload: nil
+          hops_header: "1", path: RELAY_PATH, run: nil, payload: nil
         )
       end
     end
@@ -221,7 +272,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "a downstream refusal becomes a 502 that preserves the status" do
     peer = FailingPeer.new(status: 403, error: "Authorization failed: endpoint not granted")
-    status, body = relay(downstream: peer).call(hops_header: "3", run: nil, payload: nil)
+    status, body = relay(downstream: peer).call(hops_header: "3", path: RELAY_PATH, run: nil, payload: nil)
 
     assert_equal 502, status
     assert_equal "epb_test_rails", body[:app]
@@ -235,7 +286,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
   test "a refusal is never swallowed into a 200" do
     [ 401, 403, 404, 500, 502, 503 ].each do |downstream_status|
       peer = FailingPeer.new(status: downstream_status, error: "nope")
-      status, body = relay(downstream: peer).call(hops_header: "2", run: nil, payload: nil)
+      status, body = relay(downstream: peer).call(hops_header: "2", path: RELAY_PATH, run: nil, payload: nil)
 
       assert_equal 502, status, "downstream #{downstream_status} must not answer 200"
       assert_equal downstream_status, body[:downstream_status]
@@ -246,7 +297,7 @@ class Mesh::RelayTest < ActiveSupport::TestCase
 
   test "a transport failure has no downstream status to preserve" do
     peer = FailingPeer.new(status: nil, error: "Excon::Error::Timeout: read timeout reached")
-    status, body = relay(downstream: peer).call(hops_header: "1", run: nil, payload: nil)
+    status, body = relay(downstream: peer).call(hops_header: "1", path: RELAY_PATH, run: nil, payload: nil)
 
     assert_equal 502, status
     assert_equal "downstream_failed", body[:error]
