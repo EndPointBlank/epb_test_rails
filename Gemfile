@@ -17,7 +17,15 @@ gem "stimulus-rails"
 # Build JSON APIs with ease [https://github.com/rails/jbuilder]
 gem "jbuilder"
 
-gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_rails.git", tag: "v0.6.0"
+# Pinned to a commit rather than to `tag: "v0.6.0"`, which is where this sat
+# until sc-307. v0.6.0 predates the authenticate path working at all: its
+# `EndPointBlank::Rails::Authenticated` names `Commands::EndpointAuthenticate`,
+# a constant the gem has never contained, so /whoami raised NameError on every
+# request. The fix (sc-306/sc-307) is on master and has no release tag yet, and
+# a commit pin is what epb_test_js and epb_test_py already use for the same
+# reason.
+gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_rails.git",
+                       ref: "e1f57c13bcb0a495974e944dbde0e0f1523af12a"
 
 # The mesh relay (app/services/mesh) calls the next application in the ring
 # over HTTP. Excon arrives anyway as an end_point_blank dependency, but this
