@@ -7,6 +7,13 @@ Rails.application.routes.draw do
   resources :staff, only: [ :index, :create, :destroy ]
   resources :errors, only: [ :index ]
 
+  # The only route behind the EndPointBlank *authenticate* guard (sc-307).
+  # Everything above it is behind the *authorize* guard, including the routes
+  # whose controllers inherit `AuthenticatedController` -- which includes
+  # `EndPointBlank::Rails::Authorized`, not `Authenticated`. See
+  # WhoamiController.
+  get "whoami" => "whoami#show"
+
   # The hop-budget mesh (sc-263 / sc-264). Both endpoints go through the same
   # EndPointBlank authorization as the routes above; /mesh/reports is the
   # negative control and is expected to be refused.

@@ -3,6 +3,35 @@
 One of the five `epb_test_*` applications that exercise the EndPointBlank
 client libraries end to end. This one is the Rails harness.
 
+## The two guards, and a name that lies
+
+The SDK has two `before_action` guards, and this application exercises both.
+They are easy to confuse, and confusing them is how a broken path survived here
+for a long time:
+
+| Guard | Concern | Routes here |
+| --- | --- | --- |
+| authorize | `EndPointBlank::Rails::Authorized` | everything inheriting `AuthenticatedController` — `/students`, `/staff`, `/mesh/*`, … |
+| authenticate | `EndPointBlank::Rails::Authenticated` | `/whoami`, and nothing else |
+
+**`AuthenticatedController` includes `Authorized`, not `Authenticated`.** The
+name is a trap. Until sc-307 it was the only thing in this application that
+looked like it covered the authenticate path, so nobody noticed that the path
+was never executed at all — and while nothing executed it, the concern named a
+command the gem has never contained (`Commands::EndpointAuthenticate`), parsed
+a response body before checking there was one, and dropped the status intake
+refused with. All three are fixed in the SDK; `/whoami` exists so that they
+stay fixed.
+
+If you add a route that should be behind the authenticate guard, do **not**
+subclass `AuthenticatedController` — see `app/controllers/whoami_controller.rb`.
+
+`test/controllers/whoami_controller_test.rb` stands up a real HTTP server on
+loopback (`test/support/stub_intake.rb`) and points the SDK at it, rather than
+doubling the SDK's command objects. That is deliberate: the bugs it guards
+against all live between the guard and the wire, so a double of the command
+would replace exactly the code under test.
+
 ## Running the test suite
 
 ```sh
