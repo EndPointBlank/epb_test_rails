@@ -119,7 +119,7 @@ GEM
     ed25519 (1.4.0)
     erb (6.0.6)
     erubi (1.13.1)
-    excon (1.7.0)
+    excon (1.7.1)
       logger
     globalid (1.4.0)
       activesupport (>= 6.1)
@@ -367,7 +367,7 @@ DEPENDENCIES
   capybara
   debug
   end_point_blank!
-  excon (~> 1.0)
+  excon (~> 1.7)
   importmap-rails
   jbuilder
   kamal
