@@ -31,7 +31,7 @@ gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_ra
 # over HTTP. Excon arrives anyway as an end_point_blank dependency, but this
 # application now requires it in its own right, so it is declared rather than
 # borrowed.
-gem "excon", "~> 1.0"
+gem "excon", "~> 1.7"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"
