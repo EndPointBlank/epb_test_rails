@@ -79,6 +79,17 @@ module Mesh
       # Excon::Error::Timeout covers both timeouts and Excon::Error::Socket
       # covers connection failures; both are Excon::Error.
       self.class.transport_failure("#{e.class}: #{e.message}")
+    rescue EndPointBlank::TokenUnavailableError => e
+      # Since end_point_blank_rails 0.11.1 (sc-1469) the SDK never falls back
+      # to sending this service's own client credentials as Basic when it
+      # cannot mint a token for the peer: header(url) raises instead. Until
+      # then a refused mint -- an ungranted /mesh/reports, say -- still went
+      # out as Basic and came back as the peer's 401/403. Now no request
+      # leaves at all, so this hop is the observer and there is no status,
+      # exactly like a connect error. Letting it escape would turn the
+      # negative control into an unattributed 500. The SDK's message carries
+      # a fixed reason per outcome, never intake's body or a secret.
+      self.class.transport_failure("#{e.class}: #{e.message}")
     end
 
     # Map a downstream (status, raw body) pair onto a Response.

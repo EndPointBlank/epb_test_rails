@@ -275,4 +275,29 @@ class Mesh::DownstreamTest < ActiveSupport::TestCase
     assert_nil response.status, "a timeout has no status"
     assert_nil response.origin, "and no body to recover an origin from -- the caller is the observer"
   end
+
+  test "a token the SDK cannot mint is a failure with no status, and nothing is sent" do
+    # end_point_blank_rails 0.11.1 (sc-1469): no Basic fallback. header(url)
+    # raises rather than answering this service's own credentials, so the
+    # peer is never called and this hop observes the failure itself.
+    failure = EndPointBlank::AccessTokens::Failure.new(
+      base_url: "#{BASE}/mesh/reports", outcome: :request_rejected, status: 422,
+      reason: "no grant", at: Time.now
+    )
+    refusing = Object.new
+    refusing.define_singleton_method(:header) do |url|
+      raise EndPointBlank::TokenUnavailableError.new(url, failure)
+    end
+    stub_peer
+
+    response = Mesh::Downstream.new(authorization: refusing)
+                               .post(base_url: BASE, path: REPORTS_PATH, hops: 1, run: nil, payload: nil)
+
+    assert_empty @captured, "no request may leave without a token"
+    assert_not response.ok?
+    assert_nil response.status
+    assert_nil response.origin
+    assert_match(/\AEndPointBlank::TokenUnavailableError: Could not mint/, response.error)
+    assert_operator response.error.length, :<=, Mesh::Downstream::MAX_ERROR_LENGTH
+  end
 end

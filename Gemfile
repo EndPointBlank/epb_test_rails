@@ -25,7 +25,7 @@ gem "jbuilder"
 # a commit pin is what epb_test_js and epb_test_py already use for the same
 # reason.
 gem "end_point_blank", git: "https://github.com/EndPointBlank/end_point_blank_rails.git",
-                       ref: "e1f57c13bcb0a495974e944dbde0e0f1523af12a"
+                       ref: "98c9fb35852dc2a52125523433d9c24d5811821a"
 
 # The mesh relay (app/services/mesh) calls the next application in the ring
 # over HTTP. Excon arrives anyway as an end_point_blank dependency, but this
